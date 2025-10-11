@@ -50,10 +50,9 @@ int main(void)
 
         buffer[length] = '\0';
 
-        char clientip[INET_ADDRSTRLEN];
-        inet_ntop(AF_INET, &clientaddr.sin_addr, clientip, sizeof(clientip));
-        printf("From %s:%d — %d bytes: '%s'\n",
-               clientip, ntohs(clientaddr.sin_port), length, buffer);
+        char *clientip = inet_ntoa(clientaddr.sin_addr);
+        printf("Received %d bytes from %s:%d: %s\n", length, clientip,
+               ntohs(clientaddr.sin_port), buffer);
     }
 
     closesocket(sock);
