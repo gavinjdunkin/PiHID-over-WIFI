@@ -49,18 +49,16 @@ int main(int argc, char **argv) {
             else fprintf(stderr, "short read\n");
             break;
         }
-
-        // Only send key and relative mouse events (filter others)
-        if (ev.type == EV_KEY) {
-            // format: K,<code>,<value>\n   (value: 1=press, 0=release, 2=repeat)
-            int n = snprintf(buf, sizeof(buf), "K,%d,%d\n", ev.code, ev.value);
-            sendto(sock, buf, n, 0, (struct sockaddr*)&addr, sizeof(addr));
-        } else if (ev.type == EV_REL) {
+        if (ev.type == EV_REL || ev.code == 272 || ev.code == 273 || ev.code == 274) {
             // format: M,<rel_type>,<value>\n  (rel_type: 0=X,1=Y,8=wheel etc)
             int n = snprintf(buf, sizeof(buf), "M,%d,%d\n", ev.code, ev.value);
             sendto(sock, buf, n, 0, (struct sockaddr*)&addr, sizeof(addr));
         }
-        // Ignore other events for now
+        else if (ev.type == EV_KEY) {
+            // format: K,<code>,<value>\n   (value: 1=press, 0=release, 2=repeat)
+            int n = snprintf(buf, sizeof(buf), "K,%d,%d\n", ev.code, ev.value);
+            sendto(sock, buf, n, 0, (struct sockaddr*)&addr, sizeof(addr));
+        }
     }
 
     close(sock);
