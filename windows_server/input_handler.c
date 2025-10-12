@@ -12,12 +12,12 @@ int simulate_key_event(WORD virtual_key, int is_keyup) {
 
     return SendInput(1, &input, sizeof(INPUT));
 }
-int simulate_mouse_event(int dx, int dy, DWORD flags) {
+int simulate_mouse_event(int dx, int dy, int wheel, DWORD flags) {
     INPUT input;
     input.type = INPUT_MOUSE;
     input.mi.dx = dx;
     input.mi.dy = dy;
-    input.mi.mouseData = 0;
+    input.mi.mouseData = wheel;
     input.mi.dwFlags = flags;
     input.mi.time = 0;
     input.mi.dwExtraInfo = 0;

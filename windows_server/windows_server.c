@@ -85,27 +85,27 @@ int main(void)
                 switch (msg.code) {
                     case 0: // X movement
                         flags = MOUSEEVENTF_MOVE;
-                        simulate_mouse_event(msg.value, 0, flags);
+                        simulate_mouse_event(msg.value, 0, 0, flags);
                         break;
                     case 1: // Y movement
                         flags = MOUSEEVENTF_MOVE;
-                        simulate_mouse_event(0, msg.value, flags);
+                        simulate_mouse_event(0, msg.value, 0, flags);
                         break;
-                    case 8: // Wheel
+                    case 11: // Wheel
                         flags = MOUSEEVENTF_WHEEL;
-                        simulate_mouse_event(0, 0, flags | (msg.value << 16));
+                        simulate_mouse_event(0, 0, msg.value, flags | (msg.value << 16));
                         break;
                     case 272: // Left button
                         flags = msg.value ? MOUSEEVENTF_LEFTDOWN : MOUSEEVENTF_LEFTUP;
-                        simulate_mouse_event(0, 0, flags);
+                        simulate_mouse_event(0, 0, 0, flags);
                         break;
                     case 273: // Right button
                         flags = msg.value ? MOUSEEVENTF_RIGHTDOWN : MOUSEEVENTF_RIGHTUP;
-                        simulate_mouse_event(0, 0, flags);
+                        simulate_mouse_event(0, 0, 0, flags);
                         break;
                     case 274: // Middle button
                         flags = msg.value ? MOUSEEVENTF_MIDDLEDOWN : MOUSEEVENTF_MIDDLEUP;
-                        simulate_mouse_event(0, 0, flags);
+                        simulate_mouse_event(0, 0, 0, flags);
                         break;
                     default:
                         // Unsupported mouse event
