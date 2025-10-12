@@ -42,6 +42,8 @@ int main(void)
         WSACleanup();
         return 1;
     }
+    printf("Server started, listening on port 50037...\n");
+    fflush(stdout);
 
     char buffer[200];
     struct sockaddr_in clientaddr;
