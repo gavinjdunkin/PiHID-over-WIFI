@@ -1,7 +1,9 @@
 #!/bin/bash
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 # Load environment variables
-ENV_FILE="${ENV_FILE:-/home/pi/.pi_sender_env}"
+ENV_FILE="${ENV_FILE:-$SCRIPT_DIR/.env}"
 if [ -f "$ENV_FILE" ]; then
     source "$ENV_FILE"
 fi
