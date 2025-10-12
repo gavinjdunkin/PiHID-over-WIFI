@@ -14,8 +14,6 @@
 int main(void)
 {
     init_key_table();
-    printf("Server started, listening on port 50037...\n");
-    fflush(stdout);
 
     WSADATA wsa;
     if (WSAStartup(MAKEWORD(2,2), &wsa) != 0) {
