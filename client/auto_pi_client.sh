@@ -11,8 +11,8 @@ fi
 # Fallback to defaults if not set
 DEST_IP="${DEST_IP:-192.168.1.100}"
 DEST_PORT="${DEST_PORT:-50000}"
-PI_SENDER_PATH="${PI_SENDER_PATH:-/home/pi/pi_sender}"
-LOG_FILE="${LOG_FILE:-/var/log/pi_sender_auto.log}"
+PI_CLIENT_PATH="${PI_CLIENT_PATH:-/home/pi/pi_client}"
+LOG_FILE="${LOG_FILE:-/var/log/pi_client_auto.log}"
 
 # Array to track running processes
 declare -A running_pids
@@ -42,8 +42,8 @@ is_input_device() {
     return 1
 }
 
-# Function to start pi_sender for a device
-start_pi_sender() {
+# Function to start pi_client for a device
+start_pi_client() {
     local device="$1"
     local device_name
     
@@ -54,25 +54,25 @@ start_pi_sender() {
         device_name="Unknown Device"
     fi
     
-    log_message "Starting pi_sender for $device ($device_name)"
+    log_message "Starting pi_client for $device ($device_name)"
     
-    # Start pi_sender in background
-    nohup "$PI_SENDER_PATH" "$device" "$DEST_IP" "$DEST_PORT" >> "$LOG_FILE" 2>&1 &
+    # Start pi_client in background
+    nohup "$PI_CLIENT_PATH" "$device" "$DEST_IP" "$DEST_PORT" >> "$LOG_FILE" 2>&1 &
     local pid=$!
     
     # Store the PID with device path as key
     running_pids["$device"]=$pid
     
-    log_message "Started pi_sender for $device with PID $pid"
+    log_message "Started pi_client for $device with PID $pid"
 }
 
-# Function to stop pi_sender for a device
-stop_pi_sender() {
+# Function to stop pi_client for a device
+stop_pi_client() {
     local device="$1"
     local pid="${running_pids[$device]}"
     
     if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
-        log_message "Stopping pi_sender for $device (PID $pid)"
+        log_message "Stopping pi_client for $device (PID $pid)"
         kill "$pid"
         unset running_pids["$device"]
     fi
@@ -90,17 +90,17 @@ scan_devices() {
         fi
     done
     
-    # Start pi_sender for new devices
+    # Start pi_client for new devices
     for device in "${current_devices[@]}"; do
         if [ -z "${running_pids[$device]}" ]; then
-            start_pi_sender "$device"
+            start_pi_client "$device"
         fi
     done
     
-    # Stop pi_sender for removed devices
+    # Stop pi_client for removed devices
     for device in "${!running_pids[@]}"; do
         if [ ! -e "$device" ] || ! is_input_device "$device"; then
-            stop_pi_sender "$device"
+            stop_pi_client "$device"
         fi
     done
 }
@@ -119,13 +119,13 @@ wait_for_network() {
 
 # Function to cleanup on exit
 cleanup() {
-    log_message "Shutting down auto_pi_sender..."
+    log_message "Shutting down auto_pi_client..."
     
     for device in "${!running_pids[@]}"; do
-        stop_pi_sender "$device"
+        stop_pi_client "$device"
     done
     
-    log_message "All pi_sender processes stopped"
+    log_message "All pi_client processes stopped"
     exit 0
 }
 
@@ -133,11 +133,11 @@ cleanup() {
 trap cleanup SIGTERM SIGINT
 
 # Main execution
-log_message "Starting auto_pi_sender monitor"
+log_message "Starting auto_pi_client monitor"
 
-# Check if pi_sender exists
-if [ ! -x "$PI_SENDER_PATH" ]; then
-    log_message "ERROR: pi_sender not found at $PI_SENDER_PATH"
+# Check if pi_client exists
+if [ ! -x "$PI_CLIENT_PATH" ]; then
+    log_message "ERROR: pi_client not found at $PI_CLIENT_PATH"
     exit 1
 fi
 
@@ -175,7 +175,7 @@ while true; do
             log_message "Process for $device (PID $pid) died, restarting..."
             unset running_pids["$device"]
             if [ -e "$device" ] && is_input_device "$device"; then
-                start_pi_sender "$device"
+                start_pi_client "$device"
             fi
         fi
     done
