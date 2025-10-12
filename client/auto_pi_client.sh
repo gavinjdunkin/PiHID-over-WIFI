@@ -113,7 +113,7 @@ wait_for_network() {
     
     while true; do
         # Test if the UDP port is reachable by trying to connect
-        if timeout 3 nc -u -z "$DEST_IP" "$DEST_PORT" 2>/dev/null; then
+        if timeout 10 nc -u -z "$DEST_IP" "$DEST_PORT" 2>/dev/null; then
             log_message "UDP server at $DEST_IP:$DEST_PORT is ready"
             return 0
         fi
