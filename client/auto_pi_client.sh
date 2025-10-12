@@ -181,7 +181,7 @@ done &
 while true; do
     # Check if any of our processes died
     for device in "${!running_pids[@]}"; do
-        local pid="${running_pids[$device]}"
+        pid="${running_pids[$device]}"
         if [ -n "$pid" ] && ! kill -0 "$pid" 2>/dev/null; then
             log_message "Process for $device (PID $pid) died, restarting..."
             unset running_pids["$device"]
