@@ -107,14 +107,25 @@ scan_devices() {
 
 # Function to wait for network
 wait_for_network() {
-    log_message "Waiting for network connectivity to $DEST_IP..."
+    log_message "Waiting for UDP server at $DEST_IP:$DEST_PORT..."
     
-    while ! ping -c 1 -W 2 "$DEST_IP" &> /dev/null; do
-        log_message "Network not ready, waiting..."
+    local attempts=0
+    
+    while true; do
+        # Test if the UDP port is reachable by trying to connect
+        if timeout 10 nc -u -z "$DEST_IP" "$DEST_PORT" 2>/dev/null; then
+            log_message "UDP server at $DEST_IP:$DEST_PORT is ready"
+            return 0
+        fi
+        
+        attempts=$((attempts + 1))
+        log_message "UDP server not ready, waiting... (attempt $attempts)"
         sleep 5
     done
     
-    log_message "Network connectivity established"
+    log_message "WARNING: Could not reach UDP server at $DEST_IP:$DEST_PORT after 3 minutes"
+    log_message "Starting anyway - will attempt to connect when server becomes available"
+    return 1
 }
 
 # Function to cleanup on exit
@@ -170,7 +181,7 @@ done &
 while true; do
     # Check if any of our processes died
     for device in "${!running_pids[@]}"; do
-        local pid="${running_pids[$device]}"
+        pid="${running_pids[$device]}"
         if [ -n "$pid" ] && ! kill -0 "$pid" 2>/dev/null; then
             log_message "Process for $device (PID $pid) died, restarting..."
             unset running_pids["$device"]
