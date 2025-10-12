@@ -53,3 +53,15 @@ dkms.conf
 
 # debug information files
 *.dwo
+
+# Configuration files
+*.conf
+*.env
+pi_sender.json
+.pi_sender_env
+/home/pi/pi_sender.conf
+
+# Log files
+*.log
+/var/log/pi_sender_auto.log
+
