@@ -35,7 +35,7 @@
 *.i*86
 *.x86_64
 *.hex
-pi_sender
+pi_client
 
 # Debug files
 *.dSYM/
