@@ -2,5 +2,7 @@
     "files.associations": {
         "stdlib.h": "c",
         "winsock2.h": "c"
-    }
+    },
+    "cmake.sourceDirectory": "C:/Users/usssa/source/repos/PiHID-over-WIFI/PiHID-over-wifi",
+    "cmake.ignoreCMakeListsMissing": true
 }
