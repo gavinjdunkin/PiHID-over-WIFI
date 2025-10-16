@@ -10,6 +10,30 @@
 
 #define UDP_PORT 50037
 
+#define EVENT_QUEUE_SIZE 16
+typedef struct {
+    uint8_t linux_keycode;
+    bool pressed;
+} KeyEvent;
+
+static KeyEvent event_queue[EVENT_QUEUE_SIZE];
+static int event_head = 0, event_tail = 0;
+
+void enqueue_event(uint8_t code, bool pressed) {
+    int next = (event_head + 1) % EVENT_QUEUE_SIZE;
+    if (next != event_tail) { // only enqueue if there's space
+        event_queue[event_head].linux_keycode = code;
+        event_queue[event_head].pressed = pressed;
+        event_head = next;
+    }
+}
+
+bool dequeue_event(KeyEvent *evt) {
+    if (event_tail == event_head) return false;
+    *evt = event_queue[event_tail];
+    event_tail = (event_tail + 1) % EVENT_QUEUE_SIZE;
+    return true;
+}
 
 
 static struct udp_pcb *udp_server;
@@ -17,6 +41,8 @@ static struct udp_pcb *udp_server;
 static void udp_receive_callback(void *arg, struct udp_pcb *pcb, struct pbuf *p,
                                  const ip_addr_t *addr, u16_t port) {
     if (p != NULL) {
+        // Blink the LED when receiving a packet
+        
         printf("Received %d bytes from %s:%d\n", p->tot_len, ipaddr_ntoa(addr), port);
         
         // Extract the message from the pbuf
@@ -35,10 +61,10 @@ static void udp_receive_callback(void *arg, struct udp_pcb *pcb, struct pbuf *p,
         if (msg[0] == 'K') {
             int code, value;
             if (sscanf(msg, "K,%d,%d", &code, &value) == 2) {
-                hid_send_key((uint8_t)code, value == 1);
-                printf("Keyboard: code=%d, value=%d\n", code, value);
+                enqueue_event((uint8_t)code, value == 1);
             }
         }
+
         // For mouse relative movement: "M,<type>,<value>"
         else if (msg[0] == 'M') {
             int type, value;
@@ -66,6 +92,8 @@ static void udp_receive_callback(void *arg, struct udp_pcb *pcb, struct pbuf *p,
                 }
             }
         }
+        
+        
         pbuf_free(p);
     }
 }
@@ -73,6 +101,7 @@ static void udp_receive_callback(void *arg, struct udp_pcb *pcb, struct pbuf *p,
 int main() {
     stdio_init_all();
 
+    init_key_table();
     printf("Starting HID-over-WiFi UDP server...\n");
     
 
@@ -117,6 +146,10 @@ int main() {
 
     while (true) {
         hid_task();
-        sleep_ms(5);
+        KeyEvent evt;
+        while (dequeue_event(&evt)) {
+            handle_key_event(evt.linux_keycode, evt.pressed);
+        }
+        sleep_ms(1);
     }
 }
