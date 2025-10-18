@@ -9,6 +9,7 @@
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <time.h>
+#include <sys/select.h>
 
 #define BATCH_SIZE 32         
 #define MAX_PACKET_LEN 1024   
@@ -91,55 +92,71 @@ int main(int argc, char **argv) {
     struct timespec last_send;
     clock_gettime(CLOCK_MONOTONIC, &last_send);
 
-    printf("Starting main event loop, waiting for input events...\n");
+    printf("Starting main event loop with select()...\n");
     fflush(stdout);
 
     int total_events = 0;
     while (1) {
-        ssize_t r = read(fd, &ev, sizeof(ev));
-        if (r != sizeof(ev)) {
-            if (r < 0) {
-                fprintf(stderr, "ERROR: Read failed: %s\n", strerror(errno));
-                perror("read");
-            } else {
-                fprintf(stderr, "ERROR: Short read, got %zd bytes\n", r);
-            }
-            break;
-        }
+        fd_set readfds;
+        struct timeval timeout;
+        
+        FD_ZERO(&readfds);
+        FD_SET(fd, &readfds);
+        
+        // Wait up to 5ms for events
+        timeout.tv_sec = 0;
+        timeout.tv_usec = 5000;  // 5ms
+        
+        int select_result = select(fd + 1, &readfds, NULL, NULL, &timeout);
+        
+        if (select_result > 0 && FD_ISSET(fd, &readfds)) {
+            // Events available - read as many as possible
+            int events_this_batch = 0;
+            
+            while (events_this_batch < BATCH_SIZE) {
+                ssize_t r = read(fd, &ev, sizeof(ev));
+                
+                if (r == sizeof(ev)) {
+                    total_events++;
+                    events_this_batch++;
+                    
+                    // Process event (same as before)
+                    if (ev.type == EV_KEY || ev.type == EV_REL) {
+                        char entry[64];
+                        int n = 0;
 
-        total_events++;
-        if (total_events <= 5) {
-            printf("Event %d: type=%d, code=%d, value=%d\n", 
-                   total_events, ev.type, ev.code, ev.value);
+                        if (ev.type == EV_REL || ev.code == 272 || ev.code == 273 || ev.code == 274) {
+                            n = snprintf(entry, sizeof(entry), "M,%d,%d;", ev.code, ev.value);
+                        } else if (ev.type == EV_KEY) {
+                            n = snprintf(entry, sizeof(entry), "K,%d,%d;", ev.code, ev.value);
+                        }
+
+                        if (packet_len + n < MAX_PACKET_LEN) {
+                            memcpy(packet + packet_len, entry, n);
+                            packet_len += n;
+                            event_count++;
+                        }
+                    }
+                } else if (r < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+                    // No more events available
+                    break;
+                } else {
+                    fprintf(stderr, "Read error: %s\n", strerror(errno));
+                    goto exit_loop;
+                }
+            }
+            
+            printf("Read %d events in this batch\n", events_this_batch);
             fflush(stdout);
         }
 
-        // filter interesting events
-        if (!(ev.type == EV_KEY || ev.type == EV_REL)) continue;
-
-        char entry[64];
-        int n = 0;
-
-        if (ev.type == EV_REL || ev.code == 272 || ev.code == 273 || ev.code == 274) {
-            n = snprintf(entry, sizeof(entry), "M,%d,%d;", ev.code, ev.value);
-        } else if (ev.type == EV_KEY) {
-            n = snprintf(entry, sizeof(entry), "K,%d,%d;", ev.code, ev.value);
-        }
-
-        if (packet_len + n < MAX_PACKET_LEN) {
-            memcpy(packet + packet_len, entry, n);
-            packet_len += n;
-            event_count++;
-        }
-
-        // time since last send
+        // Check if we should send
         struct timespec now;
         clock_gettime(CLOCK_MONOTONIC, &now);
         long diff_us = (now.tv_sec - last_send.tv_sec) * 1000000L +
                        (now.tv_nsec - last_send.tv_nsec) / 1000L;
 
-        // send if batch full or interval elapsed
-        if (event_count >= BATCH_SIZE || diff_us >= SEND_INTERVAL_US) {
+        if (event_count >= BATCH_SIZE || (packet_len > 0 && diff_us >= SEND_INTERVAL_US)) {
             if (packet_len > 0) {
                 printf("Sending packet with %d events\n", event_count);
                 fflush(stdout);
@@ -154,10 +171,10 @@ int main(int argc, char **argv) {
                 event_count = 0;
             }
             last_send = now;
-            sleep_us_rel(SEND_INTERVAL_US);
         }
     }
 
+exit_loop:
     printf("pi_client exiting\n");
     close(sock);
     close(fd);
