@@ -1,0 +1,140 @@
+#include "pico/stdlib.h"
+#include "pico/cyw43_arch.h"
+#include "lwip/udp.h"
+#include "lwip/pbuf.h"
+#include "lwip/ip_addr.h"
+#include "tusb.h"
+#include "hid_server.h"
+#include <stdio.h>
+#include <string.h>
+
+#define UDP_PORT 50037
+#define PACKET_BUF_SIZE 256
+#define PACKET_QUEUE_SIZE 64
+
+typedef struct {
+    uint16_t len;
+    char data[PACKET_BUF_SIZE];
+} Packet;
+
+static Packet packet_queue[PACKET_QUEUE_SIZE];
+static volatile int packet_head = 0, packet_tail = 0;
+
+static struct udp_pcb *udp_server;
+
+// ───────────────────────────────
+// Utility: ring buffer
+// ───────────────────────────────
+static bool enqueue_packet(const char *data, uint16_t len) {
+    int next = (packet_head + 1) % PACKET_QUEUE_SIZE;
+    if (next == packet_tail) return false; // full, drop
+    if (len > PACKET_BUF_SIZE) len = PACKET_BUF_SIZE;
+    memcpy(packet_queue[packet_head].data, data, len);
+    packet_queue[packet_head].len = len;
+    packet_head = next;
+    return true;
+}
+
+static bool dequeue_packet(Packet *pkt) {
+    if (packet_tail == packet_head) return false;
+    *pkt = packet_queue[packet_tail];
+    packet_tail = (packet_tail + 1) % PACKET_QUEUE_SIZE;
+    return true;
+}
+
+// ───────────────────────────────
+// LwIP UDP receive callback
+// ───────────────────────────────
+static void udp_receive_callback(void *arg, struct udp_pcb *pcb, struct pbuf *p,
+                                 const ip_addr_t *addr, u16_t port) {
+    if (!p) return;
+    if (p->tot_len > 0 && p->payload) {
+        enqueue_packet((char *)p->payload, p->tot_len);
+    }
+    pbuf_free(p); // must free immediately
+}
+
+// ───────────────────────────────
+// Event parsing & dispatch
+// ───────────────────────────────
+static void process_packet(const Packet *pkt) {
+    // parse simple commands like "K,<code>,<value>"
+    char msg[PACKET_BUF_SIZE + 1];
+    memcpy(msg, pkt->data, pkt->len);
+    msg[pkt->len] = '\0';
+
+    if (msg[0] == 'K') {
+        int code, value;
+        if (sscanf(msg, "K,%d,%d", &code, &value) == 2) {
+            handle_key_event((uint8_t)code, value == 1);
+        }
+    } else if (msg[0] == 'M') {
+        int type, value;
+        if (sscanf(msg, "M,%d,%d", &type, &value) == 2) {
+            switch (type) {
+                case 0: hid_send_mouse_move((int8_t)value, 0, 0); break;
+                case 1: hid_send_mouse_move(0, (int8_t)value, 0); break;
+                case 8: hid_send_mouse_move(0, 0, (int8_t)value); break;
+                case 272: hid_send_mouse_button(1, value == 1); break;
+                case 273: hid_send_mouse_button(2, value == 1); break;
+                case 274: hid_send_mouse_button(4, value == 1); break;
+            }
+        }
+    }
+}
+
+// ───────────────────────────────
+// Main
+// ───────────────────────────────
+int main() {
+    stdio_init_all();
+    tusb_init();
+    init_key_table();
+    printf("Starting HID-over-WiFi server\n");
+
+    if (cyw43_arch_init()) {
+        printf("Wi-Fi init failed\n");
+        return 1;
+    }
+
+    cyw43_arch_enable_sta_mode();
+
+    const char *ssid = "the woods";
+    const char *pass = "rector7task8was";
+    printf("Connecting to Wi-Fi...\n");
+    if (cyw43_arch_wifi_connect_timeout_ms(ssid, pass, CYW43_AUTH_WPA2_AES_PSK, 10000)) {
+        printf("Failed to connect\n");
+        return 1;
+    }
+
+    printf("Connected. IP: %s\n", ip4addr_ntoa(netif_ip4_addr(netif_list)));
+
+    udp_server = udp_new_ip_type(IPADDR_TYPE_ANY);
+    if (!udp_server) {
+        printf("UDP PCB alloc failed\n");
+        return 1;
+    }
+
+    if (udp_bind(udp_server, IP_ANY_TYPE, UDP_PORT) != ERR_OK) {
+        printf("UDP bind failed\n");
+        return 1;
+    }
+
+    udp_recv(udp_server, udp_receive_callback, NULL);
+    printf("Listening on UDP %d\n", UDP_PORT);
+
+    // ───────────────────────────────
+    // Main loop: fast polling cycle
+    // ───────────────────────────────
+    while (true) {
+        cyw43_arch_poll();  // keep Wi-Fi stack alive
+        hid_task();         // handle USB events
+
+        Packet pkt;
+        while (dequeue_packet(&pkt)) {
+            process_packet(&pkt);
+        }
+
+        sleep_us(500); // tiny yield
+    }
+}

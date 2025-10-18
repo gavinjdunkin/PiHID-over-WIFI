@@ -1,4 +1,3 @@
-// pi_sender.c
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -9,6 +8,18 @@
 #include <sys/socket.h>
 #include <arpa/inet.h>
 #include <netinet/in.h>
+#include <time.h>
+
+#define BATCH_SIZE 32         // number of events to batch before sending
+#define MAX_PACKET_LEN 1024   // max UDP payload size
+#define SEND_INTERVAL_US 2000 // send at most every 2ms (500Hz)
+
+static void sleep_us_rel(unsigned int us) {
+    struct timespec ts;
+    ts.tv_sec = us / 1000000;
+    ts.tv_nsec = (us % 1000000) * 1000;
+    nanosleep(&ts, NULL);
+}
 
 int main(int argc, char **argv) {
     if (argc < 4) {
@@ -27,7 +38,11 @@ int main(int argc, char **argv) {
     }
 
     int sock = socket(AF_INET, SOCK_DGRAM, 0);
-    if (sock < 0) { perror("socket"); close(fd); return 1; }
+    if (sock < 0) {
+        perror("socket");
+        close(fd);
+        return 1;
+    }
 
     struct sockaddr_in addr;
     memset(&addr, 0, sizeof(addr));
@@ -41,7 +56,13 @@ int main(int argc, char **argv) {
     }
 
     struct input_event ev;
-    char buf[64];
+    char packet[MAX_PACKET_LEN];
+    int packet_len = 0;
+    int event_count = 0;
+
+    struct timespec last_send;
+    clock_gettime(CLOCK_MONOTONIC, &last_send);
+
     while (1) {
         ssize_t r = read(fd, &ev, sizeof(ev));
         if (r != sizeof(ev)) {
@@ -49,15 +70,40 @@ int main(int argc, char **argv) {
             else fprintf(stderr, "short read\n");
             break;
         }
+
+        // filter interesting events
+        if (!(ev.type == EV_KEY || ev.type == EV_REL)) continue;
+
+        char entry[64];
+        int n = 0;
+
         if (ev.type == EV_REL || ev.code == 272 || ev.code == 273 || ev.code == 274) {
-            // format: M,<rel_type>,<value>\n  (rel_type: 0=X,1=Y,8=wheel etc)
-            int n = snprintf(buf, sizeof(buf), "M,%d,%d\n", ev.code, ev.value);
-            sendto(sock, buf, n, 0, (struct sockaddr*)&addr, sizeof(addr));
+            n = snprintf(entry, sizeof(entry), "M,%d,%d;", ev.code, ev.value);
+        } else if (ev.type == EV_KEY) {
+            n = snprintf(entry, sizeof(entry), "K,%d,%d;", ev.code, ev.value);
         }
-        else if (ev.type == EV_KEY) {
-            // format: K,<code>,<value>\n   (value: 1=press, 0=release, 2=repeat)
-            int n = snprintf(buf, sizeof(buf), "K,%d,%d\n", ev.code, ev.value);
-            sendto(sock, buf, n, 0, (struct sockaddr*)&addr, sizeof(addr));
+
+        if (packet_len + n < MAX_PACKET_LEN) {
+            memcpy(packet + packet_len, entry, n);
+            packet_len += n;
+            event_count++;
+        }
+
+        // time since last send
+        struct timespec now;
+        clock_gettime(CLOCK_MONOTONIC, &now);
+        long diff_us = (now.tv_sec - last_send.tv_sec) * 1000000L +
+                       (now.tv_nsec - last_send.tv_nsec) / 1000L;
+
+        // send if batch full or interval elapsed
+        if (event_count >= BATCH_SIZE || diff_us >= SEND_INTERVAL_US) {
+            if (packet_len > 0) {
+                sendto(sock, packet, packet_len, 0, (struct sockaddr*)&addr, sizeof(addr));
+                packet_len = 0;
+                event_count = 0;
+            }
+            last_send = now;
+            sleep_us_rel(SEND_INTERVAL_US); // pacing
         }
     }
 
