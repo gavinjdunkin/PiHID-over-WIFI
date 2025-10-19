@@ -79,9 +79,9 @@ void handle_key_event(uint8_t linux_keycode, bool pressed) {
     uint8_t keycode[6] = {0};
     if (pressed) {
         keycode[0] = hid_code;
-        tud_hid_keyboard_report(1, 0, keycode);
+        tud_hid_n_keyboard_report(0, 0, 0, keycode);  // Interface 0 = keyboard
     } else {
-        tud_hid_keyboard_report(1, 0, keycode);  // all zeros = no keys pressed
+        tud_hid_n_keyboard_report(0, 0, 0, keycode);  // all zeros = no keys pressed
     }
 }
 
@@ -96,11 +96,11 @@ void hid_send_mouse_button(uint8_t button_mask, bool pressed) {
     } else {
         mouse_buttons &= ~button_mask;
     }
-    tud_hid_mouse_report(2, mouse_buttons, 0, 0, 0, 0);
+    tud_hid_n_mouse_report(1, 0, mouse_buttons, 0, 0, 0, 0);  // Interface 1 = mouse
 }
 
 void hid_send_mouse_move(int8_t dx, int8_t dy, int8_t wheel) {
-    tud_hid_mouse_report(2, mouse_buttons, dx, dy, wheel, 0);
+    tud_hid_n_mouse_report(1, 0, mouse_buttons, dx, dy, wheel, 0);  // Interface 1 = mouse
 }
 
 // ───────────────────────────────

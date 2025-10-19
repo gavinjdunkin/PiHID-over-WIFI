@@ -25,7 +25,7 @@ extern "C" {
 
 // defined by board.mk
 #ifndef CFG_TUSB_MCU
-#define CFG_TUSB_MCU          OPT_MCU_RP2040
+#define CFG_TUSB_MCU          OPT_MCU_RP2040  // RP2350 uses same USB controller as RP2040
 #endif
 
 #ifndef CFG_TUSB_OS
@@ -66,7 +66,7 @@ extern "C" {
 #define CFG_TUD_MAX_SPEED     BOARD_TUD_MAX_SPEED
 
 // Root Hub Port Configuration
-#define CFG_TUSB_RHPORT0_MODE (OPT_MODE_DEVICE | OPT_MODE_HIGH_SPEED)
+#define CFG_TUSB_RHPORT0_MODE (OPT_MODE_DEVICE | OPT_MODE_FULL_SPEED)
 
 //--------------------------------------------------------------------
 // DEVICE CONFIGURATION
@@ -77,7 +77,7 @@ extern "C" {
 #endif
 
 //------------- CLASS -------------//
-#define CFG_TUD_HID               1
+#define CFG_TUD_HID               2  // Number of HID interfaces (keyboard + mouse)
 #define CFG_TUD_CDC               0
 #define CFG_TUD_MSC               0
 #define CFG_TUD_MIDI              0

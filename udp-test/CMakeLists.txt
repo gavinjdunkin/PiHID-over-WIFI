@@ -28,36 +28,35 @@ set(PICO_BOARD pico2_w CACHE STRING "Board type")
 # Pull in Raspberry Pi Pico SDK (must be before project)
 include(pico_sdk_import.cmake)
 
-project(pihidfi C CXX ASM)
+project(udp-test C CXX ASM)
 
 # Initialise the Raspberry Pi Pico SDK
 pico_sdk_init()
 
 # Add executable. Default name is the project name, version 0.1
 
-add_executable(pihidfi pihidfi.c hid_server.c usb_descriptors.c)
+add_executable(udp-test udp-test.c )
 
-pico_set_program_name(pihidfi "pihidfi")
-pico_set_program_version(pihidfi "0.1")
+pico_set_program_name(udp-test "udp-test")
+pico_set_program_version(udp-test "0.1")
 
 # Modify the below lines to enable/disable output over UART/USB
-pico_enable_stdio_uart(pihidfi 1)
-pico_enable_stdio_usb(pihidfi 1)
+pico_enable_stdio_uart(udp-test 0)
+pico_enable_stdio_usb(udp-test 0)
 
 # Add the standard library to the build
-target_link_libraries(pihidfi
-        pico_stdlib
-        pico_cyw43_arch_lwip_threadsafe_background  # Full Wi-Fi + networking stack
-        pico_multicore
-        tinyusb_device
-        tinyusb_board
-        hardware_gpio
-        hardware_uart)
+target_link_libraries(udp-test
+        pico_stdlib)
 
 # Add the standard include files to the build
-target_include_directories(pihidfi PRIVATE
+target_include_directories(udp-test PRIVATE
         ${CMAKE_CURRENT_LIST_DIR}
 )
 
-pico_add_extra_outputs(pihidfi)
+# Add any user requested libraries
+target_link_libraries(udp-test 
+        pico_cyw43_arch_lwip_threadsafe_background
+        )
+
+pico_add_extra_outputs(udp-test)
 

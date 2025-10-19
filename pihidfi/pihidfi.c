@@ -1,8 +1,10 @@
 #include "pico/stdlib.h"
 #include "pico/cyw43_arch.h"
+#include "pico/multicore.h"
 #include "lwip/udp.h"
 #include "lwip/pbuf.h"
 #include "lwip/ip_addr.h"
+#include "hardware/gpio.h"
 #include "tusb.h"
 #include "hid_server.h"
 #include <stdio.h>
@@ -11,6 +13,13 @@
 #define UDP_PORT 50037
 #define PACKET_BUF_SIZE 256
 #define PACKET_QUEUE_SIZE 64
+
+// For Pico 2 W, LED is controlled by CYW43 chip, not GPIO
+
+// Shared data between cores
+static volatile int udp_packet_count = 0;
+static volatile int processed_packet_count = 0;
+static volatile bool core1_ready = false;
 
 typedef struct {
     uint16_t len;
@@ -49,7 +58,7 @@ static void udp_receive_callback(void *arg, struct udp_pcb *pcb, struct pbuf *p,
                                  const ip_addr_t *addr, u16_t port) {
     if (!p) return;
     if (p->tot_len > 0 && p->payload) {
-        enqueue_packet((char *)p->payload, p->tot_len);
+        bool queued = enqueue_packet((char *)p->payload, p->tot_len);
     }
     pbuf_free(p); // must free immediately
 }
@@ -58,6 +67,8 @@ static void udp_receive_callback(void *arg, struct udp_pcb *pcb, struct pbuf *p,
 // Event parsing & dispatch
 // ───────────────────────────────
 static void process_packet(const Packet *pkt) {
+    processed_packet_count++;
+    
     // parse simple commands like "K,<code>,<value>"
     char msg[PACKET_BUF_SIZE + 1];
     memcpy(msg, pkt->data, pkt->len);
@@ -83,58 +94,32 @@ static void process_packet(const Packet *pkt) {
     }
 }
 
-// ───────────────────────────────
-// Main
-// ───────────────────────────────
+void core1_entry() {
+    // Wi-Fi + UDP server here
+    if (cyw43_arch_init()) return;
+    cyw43_arch_enable_sta_mode();
+    cyw43_arch_wifi_connect_timeout_ms("the woods", "rector7task8was", CYW43_AUTH_WPA2_AES_PSK, 30000);
+    udp_server = udp_new_ip_type(IPADDR_TYPE_ANY);
+    udp_bind(udp_server, IP_ANY_TYPE, UDP_PORT);
+    udp_recv(udp_server, udp_receive_callback, NULL);
+    while (true) {
+        cyw43_arch_poll();
+        sleep_us(1000);
+    }
+}
+
 int main() {
     stdio_init_all();
+    multicore_launch_core1(core1_entry);
+
     tusb_init();
     init_key_table();
-    printf("Starting HID-over-WiFi server\n");
 
-    if (cyw43_arch_init()) {
-        printf("Wi-Fi init failed\n");
-        return 1;
-    }
-
-    cyw43_arch_enable_sta_mode();
-
-    const char *ssid = "the woods";
-    const char *pass = "rector7task8was";
-    printf("Connecting to Wi-Fi...\n");
-    if (cyw43_arch_wifi_connect_timeout_ms(ssid, pass, CYW43_AUTH_WPA2_AES_PSK, 10000)) {
-        printf("Failed to connect\n");
-        return 1;
-    }
-
-    printf("Connected. IP: %s\n", ip4addr_ntoa(netif_ip4_addr(netif_list)));
-
-    udp_server = udp_new_ip_type(IPADDR_TYPE_ANY);
-    if (!udp_server) {
-        printf("UDP PCB alloc failed\n");
-        return 1;
-    }
-
-    if (udp_bind(udp_server, IP_ANY_TYPE, UDP_PORT) != ERR_OK) {
-        printf("UDP bind failed\n");
-        return 1;
-    }
-
-    udp_recv(udp_server, udp_receive_callback, NULL);
-    printf("Listening on UDP %d\n", UDP_PORT);
-
-    // ───────────────────────────────
-    // Main loop: fast polling cycle
-    // ───────────────────────────────
     while (true) {
-        cyw43_arch_poll();  // keep Wi-Fi stack alive
-        hid_task();         // handle USB events
-
+        tud_task();
+        // Process packet queue populated by UDP callbacks on core1
         Packet pkt;
-        while (dequeue_packet(&pkt)) {
-            process_packet(&pkt);
-        }
-
-        sleep_us(500); // tiny yield
+        while (dequeue_packet(&pkt)) process_packet(&pkt);
+        sleep_us(100);
     }
 }
