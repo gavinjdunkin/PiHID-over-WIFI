@@ -70,36 +70,51 @@ static void process_packet(const Packet *pkt) {
     memcpy(msg, pkt->data, pkt->len);
     msg[pkt->len] = '\0';
 
-    // Split the packet on ';'
     char *saveptr;
     char *cmd = strtok_r(msg, ";", &saveptr);
+
+    int total_dx = 0;
+    int total_dy = 0;
+    int total_scroll = 0;
+    uint8_t buttons = 0;
+    uint8_t button_changes = 0;
+
     while (cmd != NULL) {
-        // Trim leading/trailing spaces if needed
         while (*cmd == ' ') cmd++;
 
-        if (cmd[0] == 'K') {
+        if (cmd[0] == 'M') {
+            int type, value;
+            if (sscanf(cmd, "M,%d,%d", &type, &value) == 2) {
+                switch (type) {
+                    case 0: total_dx += (int8_t)value; break;  // accumulate X
+                    case 1: total_dy += (int8_t)value; break;  // accumulate Y
+                    case 8: total_scroll += (int8_t)value; break;
+                    case 272: // left
+                        hid_send_mouse_button(1, value == 1);
+                        break;
+                    case 273: // right
+                        hid_send_mouse_button(2, value == 1);
+                        break;
+                    case 274: // middle
+                        hid_send_mouse_button(4, value == 1);
+                        break;
+                }
+            }
+        } else if (cmd[0] == 'K') {
             int code, value;
             if (sscanf(cmd, "K,%d,%d", &code, &value) == 2) {
                 handle_key_event((uint8_t)code, value == 1);
             }
-        } else if (cmd[0] == 'M') {
-            int type, value;
-            if (sscanf(cmd, "M,%d,%d", &type, &value) == 2) {
-                switch (type) {
-                    case 0: hid_send_mouse_move((int8_t)value, 0, 0); break;
-                    case 1: hid_send_mouse_move(0, (int8_t)value, 0); break;
-                    case 8: hid_send_mouse_move(0, 0, (int8_t)value); break;
-                    case 272: hid_send_mouse_button(1, value == 1); break;
-                    case 273: hid_send_mouse_button(2, value == 1); break;
-                    case 274: hid_send_mouse_button(4, value == 1); break;
-                }
-            }
         }
 
-        // Move to next command
         cmd = strtok_r(NULL, ";", &saveptr);
     }
+
+    // After parsing all commands in this packet, send one combined report
+    if (total_dx || total_dy || total_scroll)
+        hid_send_mouse_move((int8_t)total_dx, (int8_t)total_dy, (int8_t)total_scroll);
 }
+
 
 void core1_entry() {
     // Wi-Fi + UDP server here

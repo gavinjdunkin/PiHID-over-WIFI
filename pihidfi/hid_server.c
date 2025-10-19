@@ -92,15 +92,25 @@ static uint8_t mouse_buttons = 0;
 
 void hid_send_mouse_button(uint8_t button_mask, bool pressed) {
     if (pressed) {
-        mouse_buttons |= button_mask;
+        mouse_buttons |= button_mask;  // Set the button bit
     } else {
-        mouse_buttons &= ~button_mask;
+        mouse_buttons &= ~button_mask; // Clear the button bit
     }
-    tud_hid_n_mouse_report(1, 0, mouse_buttons, 0, 0, 0, 0);  // Interface 1 = mouse
+    
+    // Send mouse report with current button state and no movement
+    tud_hid_n_mouse_report(1, 0, mouse_buttons, 0, 0, 0, 0);
 }
 
 void hid_send_mouse_move(int8_t dx, int8_t dy, int8_t wheel) {
-    tud_hid_n_mouse_report(1, 0, mouse_buttons, dx, dy, wheel, 0);  // Interface 1 = mouse
+    // Use standard TinyUSB mouse report for interface 1  
+    // Include current button state so drag operations work
+    tud_hid_n_mouse_report(1, 0, mouse_buttons, dx, dy, wheel, 0);
+}
+
+// New function to send mouse report with explicit button state
+void hid_send_mouse_report(uint8_t buttons, int8_t dx, int8_t dy, int8_t wheel) {
+    mouse_buttons = buttons;  // Update internal state
+    tud_hid_n_mouse_report(1, 0, buttons, dx, dy, wheel, 0);
 }
 
 // ───────────────────────────────
