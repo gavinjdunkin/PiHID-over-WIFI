@@ -29,80 +29,62 @@ is_input_device() {
     # Get device info from /proc/bus/input/devices
     device_info=$(cat /proc/bus/input/devices | grep -A10 -B5 "$(basename "$device")")
     
-    # Check if it's a keyboard, mouse, or touchpad
-    if echo "$device_info" | grep -qi -E "(keyboard|mouse|touchpad|synaptics)"; then
-        return 0
-    fi
-    
-    # Also check if it has key or relative events
-    if echo "$device_info" | grep -q "EV=.*[13]"; then  # EV=3 (key+rel) or EV=1 (key)
+    # Restrict to keyboard and mouse devices only
+    if echo "$device_info" | grep -qi -E "(keyboard|mouse)"; then
         return 0
     fi
     
     return 1
 }
 
-# Function to start pi_client for a device
+# Function to start pi_client for devices
 start_pi_client() {
-    local device="$1"
-    local device_name
-    
-    # Get friendly device name
-    device_name=$(cat /proc/bus/input/devices | grep -B5 "$(basename "$device")" | grep "Name=" | cut -d'"' -f2)
-    
-    if [ -z "$device_name" ]; then
-        device_name="Unknown Device"
+    # Kill any existing pi_client process
+    if [ -n "${running_pids["current"]}" ]; then
+        stop_pi_client "current"
     fi
     
-    log_message "Starting pi_client for $device ($device_name)"
+    log_message "Starting pi_client with devices: $*"
     
     # Start pi_client in background
-    nohup "$PI_CLIENT_PATH" "$device" "$DEST_IP" "$DEST_PORT" >> "$LOG_FILE" 2>&1 &
+    nohup "$PI_CLIENT_PATH" "$DEST_IP" "$DEST_PORT" "$@" >> "$LOG_FILE" 2>&1 &
     local pid=$!
     
-    # Store the PID with device path as key
-    running_pids["$device"]=$pid
+    # Store the PID with a fixed key "current"
+    running_pids["current"]=$pid
     
-    log_message "Started pi_client for $device with PID $pid"
+    log_message "Started pi_client with PID $pid"
 }
 
 # Function to stop pi_client for a device
 stop_pi_client() {
-    local device="$1"
-    local pid="${running_pids[$device]}"
+    local key="$1"
+    local pid="${running_pids[$key]}"
     
     if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
-        log_message "Stopping pi_client for $device (PID $pid)"
+        log_message "Stopping pi_client (PID $pid)"
         kill "$pid"
-        unset running_pids["$device"]
+        unset running_pids["$key"]
     fi
 }
 
 # Function to scan for input devices
 scan_devices() {
-    local current_devices=()
+    local devices=()
     local device
     
-    # Find all event devices
+    # Find all suitable event devices (mouse and keyboard)
     for device in /dev/input/event*; do
         if [ -e "$device" ] && is_input_device "$device"; then
-            current_devices+=("$device")
+            devices+=("$device")
         fi
     done
     
-    # Start pi_client for new devices
-    for device in "${current_devices[@]}"; do
-        if [ -z "${running_pids[$device]}" ]; then
-            start_pi_client "$device"
-        fi
-    done
-    
-    # Stop pi_client for removed devices
-    for device in "${!running_pids[@]}"; do
-        if [ ! -e "$device" ] || ! is_input_device "$device"; then
-            stop_pi_client "$device"
-        fi
-    done
+    # Start pi_client if both mouse and keyboard are found
+    if [ ${#devices[@]} -gt 0 ]; then
+        log_message "Detected devices: ${devices[*]}"
+        start_pi_client "${devices[@]}"
+    fi
 }
 
 # Function to wait for network
@@ -132,8 +114,8 @@ wait_for_network() {
 cleanup() {
     log_message "Shutting down auto_pi_client..."
     
-    for device in "${!running_pids[@]}"; do
-        stop_pi_client "$device"
+    for key in "${!running_pids[@]}"; do
+        stop_pi_client "$key"
     done
     
     log_message "All pi_client processes stopped"
@@ -179,17 +161,13 @@ done &
 
 # Keep the script running and periodically check processes
 while true; do
-    # Check if any of our processes died
-    for device in "${!running_pids[@]}"; do
-        pid="${running_pids[$device]}"
-        if [ -n "$pid" ] && ! kill -0 "$pid" 2>/dev/null; then
-            log_message "Process for $device (PID $pid) died, restarting..."
-            unset running_pids["$device"]
-            if [ -e "$device" ] && is_input_device "$device"; then
-                start_pi_client "$device"
-            fi
-        fi
-    done
+    # Check if our process died
+    pid="${running_pids["current"]}"
+    if [ -n "$pid" ] && ! kill -0 "$pid" 2>/dev/null; then
+        log_message "Process (PID $pid) died, restarting..."
+        unset running_pids["current"]
+        scan_devices
+    fi
     
     sleep 10
 done
