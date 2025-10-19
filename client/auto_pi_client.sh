@@ -1,177 +1,102 @@
 #!/bin/bash
+set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-
-# Load environment variables
 ENV_FILE="${ENV_FILE:-$SCRIPT_DIR/.env}"
-if [ -f "$ENV_FILE" ]; then
-    source "$ENV_FILE"
-fi
 
-# Fallback to defaults if not set
+# Load .env if present
+[ -f "$ENV_FILE" ] && source "$ENV_FILE"
+
 DEST_IP="${DEST_IP:-192.168.1.100}"
 DEST_PORT="${DEST_PORT:-50000}"
 PI_CLIENT_PATH="${PI_CLIENT_PATH:-/home/pi/pi_client}"
 LOG_FILE="${LOG_FILE:-/var/log/pi_client_auto.log}"
 
-# Array to track running processes
-declare -A running_pids
+# Track running process
+PI_CLIENT_PID=""
 
-log_message() {
-    echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" | tee -a "$LOG_FILE"
+log() {
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - $*" | tee -a "$LOG_FILE"
 }
 
-# Function to check if device is suitable for monitoring
-is_input_device() {
-    local device="$1"
-    local device_info
-    
-    # Get device info from /proc/bus/input/devices
-    device_info=$(cat /proc/bus/input/devices | grep -A10 -B5 "$(basename "$device")")
-    
-    # Restrict to keyboard and mouse devices only
-    if echo "$device_info" | grep -qi -E "(keyboard|mouse)"; then
-        return 0
-    fi
-    
-    return 1
-}
-
-# Function to start pi_client for devices
-start_pi_client() {
-    # Kill any existing pi_client process
-    if [ -n "${running_pids["current"]}" ]; then
-        stop_pi_client "current"
-    fi
-    
-    log_message "Starting pi_client with devices: $*"
-    
-    # Start pi_client in background
-    nohup "$PI_CLIENT_PATH" "$DEST_IP" "$DEST_PORT" "$@" >> "$LOG_FILE" 2>&1 &
-    local pid=$!
-    
-    # Store the PID with a fixed key "current"
-    running_pids["current"]=$pid
-    
-    log_message "Started pi_client with PID $pid"
-}
-
-# Function to stop pi_client for a device
-stop_pi_client() {
-    local key="$1"
-    local pid="${running_pids[$key]}"
-    
-    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
-        log_message "Stopping pi_client (PID $pid)"
-        kill "$pid"
-        unset running_pids["$key"]
-    fi
-}
-
-# Function to scan for input devices
-scan_devices() {
-    local devices=()
-    local device
-    
-    # Look for specific symlinks in /dev/input/by-id/
-    for device in /dev/input/by-id/*; do
-        if [[ "$device" == *-event-kbd ]] || [[ "$device" == *-event-mouse ]]; then
-            # Resolve the symlink to the actual event device
-            resolved_device=$(readlink -f "$device")
-            if [ -e "$resolved_device" ]; then
-                devices+=("$resolved_device")
-            fi
-        fi
-    done
-    
-    # Start pi_client if both mouse and keyboard are found
-    if [ ${#devices[@]} -gt 0 ]; then
-        log_message "Detected devices: ${devices[*]}"
-        start_pi_client "${devices[@]}"
-    fi
-}
-
-# Function to wait for network
-wait_for_network() {
-    log_message "Waiting for UDP server at $DEST_IP:$DEST_PORT..."
-    
-    local attempts=0
-    
-    while true; do
-        # Test if the UDP port is reachable by trying to connect
-        if timeout 10 nc -u -z "$DEST_IP" "$DEST_PORT" 2>/dev/null; then
-            log_message "UDP server at $DEST_IP:$DEST_PORT is ready"
-            return 0
-        fi
-        
-        attempts=$((attempts + 1))
-        log_message "UDP server not ready, waiting... (attempt $attempts)"
-        sleep 5
-    done
-    
-    log_message "WARNING: Could not reach UDP server at $DEST_IP:$DEST_PORT after 3 minutes"
-    log_message "Starting anyway - will attempt to connect when server becomes available"
-    return 1
-}
-
-# Function to cleanup on exit
 cleanup() {
-    log_message "Shutting down auto_pi_client..."
-    
-    for key in "${!running_pids[@]}"; do
-        stop_pi_client "$key"
-    done
-    
-    log_message "All pi_client processes stopped"
+    log "Shutting down auto_pi_client..."
+    if [ -n "$PI_CLIENT_PID" ] && kill -0 "$PI_CLIENT_PID" 2>/dev/null; then
+        log "Stopping pi_client (PID $PI_CLIENT_PID)"
+        kill "$PI_CLIENT_PID"
+    fi
     exit 0
 }
 
-# Set up signal handlers
-trap cleanup SIGTERM SIGINT
+trap cleanup SIGINT SIGTERM
 
-# Main execution
-log_message "Starting auto_pi_client monitor"
+wait_for_network() {
+    log "Waiting for UDP server at $DEST_IP:$DEST_PORT..."
+    until nc -u -z "$DEST_IP" "$DEST_PORT" 2>/dev/null; do
+        log "UDP server not ready yet..."
+        sleep 5
+    done
+    log "UDP server is reachable."
+}
 
-# Check if pi_client exists
-if [ ! -x "$PI_CLIENT_PATH" ]; then
-    log_message "ERROR: pi_client not found at $PI_CLIENT_PATH"
-    exit 1
-fi
+get_input_devices() {
+    local devices=()
+    for f in /dev/input/by-id/*; do
+        [[ -e "$f" ]] || continue
+        case "$f" in
+            *-event-kbd | *-event-mouse)
+                local realdev
+                realdev=$(readlink -f "$f")
+                devices+=("$realdev")
+                ;;
+        esac
+    done
+    echo "${devices[@]}"
+}
 
-# Wait for network (with timeout)
-wait_for_network
-
-# Initial device scan
-log_message "Performing initial device scan..."
-scan_devices
-
-# Monitor for device changes using inotify
-log_message "Starting device monitoring..."
-
-# Monitor /dev/input for changes
-inotifywait -m -e create,delete,modify /dev/input --format '%e %w%f' 2>/dev/null |
-while read event file; do
-    # Only process event* files
-    if [[ "$file" =~ /dev/input/event[0-9]+ ]]; then
-        log_message "Device change detected: $event $file"
-        
-        # Small delay to let device settle
-        sleep 1
-        
-        # Rescan devices
-        scan_devices
+start_pi_client() {
+    local devices=("$@")
+    if [ "${#devices[@]}" -eq 0 ]; then
+        log "No input devices found, not starting pi_client."
+        return
     fi
-done &
 
-# Keep the script running and periodically check processes
-while true; do
-    # Check if our process died
-    pid="${running_pids["current"]}"
-    if [ -n "$pid" ] && ! kill -0 "$pid" 2>/dev/null; then
-        log_message "Process (PID $pid) died, restarting..."
-        unset running_pids["current"]
-        scan_devices
+    # Stop old one
+    if [ -n "$PI_CLIENT_PID" ] && kill -0 "$PI_CLIENT_PID" 2>/dev/null; then
+        log "Stopping existing pi_client (PID $PI_CLIENT_PID)"
+        kill "$PI_CLIENT_PID"
+        wait "$PI_CLIENT_PID" 2>/dev/null || true
     fi
-    
-    sleep 10
-done
+
+    log "Starting pi_client with devices: ${devices[*]}"
+    nohup "$PI_CLIENT_PATH" "$DEST_IP" "$DEST_PORT" "${devices[@]}" >>"$LOG_FILE" 2>&1 &
+    PI_CLIENT_PID=$!
+    log "Started pi_client (PID $PI_CLIENT_PID)"
+}
+
+monitor_loop() {
+    local prev_devices=""
+    while true; do
+        local devices
+        devices=$(get_input_devices)
+
+        if [ "$devices" != "$prev_devices" ]; then
+            log "Device change detected!"
+            log "Detected devices: $devices"
+            start_pi_client $devices
+            prev_devices="$devices"
+        fi
+
+        sleep 3
+    done
+}
+
+main() {
+    log "==== Starting auto_pi_client monitor ===="
+    [ -x "$PI_CLIENT_PATH" ] || { log "ERROR: pi_client not found at $PI_CLIENT_PATH"; exit 1; }
+
+    wait_for_network
+    monitor_loop
+}
+
+main
