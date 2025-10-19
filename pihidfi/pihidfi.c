@@ -63,34 +63,41 @@ static void udp_receive_callback(void *arg, struct udp_pcb *pcb, struct pbuf *p,
     pbuf_free(p); // must free immediately
 }
 
-// ───────────────────────────────
-// Event parsing & dispatch
-// ───────────────────────────────
 static void process_packet(const Packet *pkt) {
     processed_packet_count++;
-    
-    // parse simple commands like "K,<code>,<value>"
+
     char msg[PACKET_BUF_SIZE + 1];
     memcpy(msg, pkt->data, pkt->len);
     msg[pkt->len] = '\0';
 
-    if (msg[0] == 'K') {
-        int code, value;
-        if (sscanf(msg, "K,%d,%d", &code, &value) == 2) {
-            handle_key_event((uint8_t)code, value == 1);
-        }
-    } else if (msg[0] == 'M') {
-        int type, value;
-        if (sscanf(msg, "M,%d,%d", &type, &value) == 2) {
-            switch (type) {
-                case 0: hid_send_mouse_move((int8_t)value, 0, 0); break;
-                case 1: hid_send_mouse_move(0, (int8_t)value, 0); break;
-                case 8: hid_send_mouse_move(0, 0, (int8_t)value); break;
-                case 272: hid_send_mouse_button(1, value == 1); break;
-                case 273: hid_send_mouse_button(2, value == 1); break;
-                case 274: hid_send_mouse_button(4, value == 1); break;
+    // Split the packet on ';'
+    char *saveptr;
+    char *cmd = strtok_r(msg, ";", &saveptr);
+    while (cmd != NULL) {
+        // Trim leading/trailing spaces if needed
+        while (*cmd == ' ') cmd++;
+
+        if (cmd[0] == 'K') {
+            int code, value;
+            if (sscanf(cmd, "K,%d,%d", &code, &value) == 2) {
+                handle_key_event((uint8_t)code, value == 1);
+            }
+        } else if (cmd[0] == 'M') {
+            int type, value;
+            if (sscanf(cmd, "M,%d,%d", &type, &value) == 2) {
+                switch (type) {
+                    case 0: hid_send_mouse_move((int8_t)value, 0, 0); break;
+                    case 1: hid_send_mouse_move(0, (int8_t)value, 0); break;
+                    case 8: hid_send_mouse_move(0, 0, (int8_t)value); break;
+                    case 272: hid_send_mouse_button(1, value == 1); break;
+                    case 273: hid_send_mouse_button(2, value == 1); break;
+                    case 274: hid_send_mouse_button(4, value == 1); break;
+                }
             }
         }
+
+        // Move to next command
+        cmd = strtok_r(NULL, ";", &saveptr);
     }
 }
 
