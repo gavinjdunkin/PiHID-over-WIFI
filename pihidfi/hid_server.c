@@ -9,6 +9,12 @@
 #define MAX_KEYMAP 128
 static uint8_t linux_to_hid[MAX_KEYMAP];
 
+
+#define MAX_KEYS 6
+
+static uint8_t key_state[MAX_KEYS] = {0};
+static uint8_t current_modifiers = 0;
+
 void init_key_table(void) {
     memset(linux_to_hid, 0, sizeof(linux_to_hid));
 
@@ -68,21 +74,88 @@ void init_key_table(void) {
     linux_to_hid[100]= HID_KEY_ALT_RIGHT;
 }
 
-// ───────────────────────────────
-// Keyboard handling
-// ───────────────────────────────
-void handle_key_event(uint8_t linux_keycode, bool pressed) {
-    if (linux_keycode >= MAX_KEYMAP) return;
-    uint8_t hid_code = linux_to_hid[linux_keycode];
-    if (!hid_code) return;
-
-    uint8_t keycode[6] = {0};
-    if (pressed) {
-        keycode[0] = hid_code;
-        tud_hid_n_keyboard_report(0, 0, 0, keycode);  // Interface 0 = keyboard
-    } else {
-        tud_hid_n_keyboard_report(0, 0, 0, keycode);  // all zeros = no keys pressed
+void hid_add_key(uint8_t keycode) {
+    // Avoid duplicates
+    for (int i = 0; i < MAX_KEYS; i++) {
+        if (key_state[i] == keycode) return;
     }
+
+    // Find empty slot
+    for (int i = 0; i < MAX_KEYS; i++) {
+        if (key_state[i] == 0) {
+            key_state[i] = keycode;
+            break;
+        }
+    }
+}
+
+void hid_remove_key(uint8_t keycode) {
+    for (int i = 0; i < MAX_KEYS; i++) {
+        if (key_state[i] == keycode) {
+            key_state[i] = 0;
+            break;
+        }
+    }
+
+    // Compact array
+    uint8_t compacted[MAX_KEYS] = {0};
+    int idx = 0;
+    for (int i = 0; i < MAX_KEYS; i++) {
+        if (key_state[i] != 0 && idx < MAX_KEYS) {
+            compacted[idx++] = key_state[i];
+        }
+    }
+    memcpy(key_state, compacted, MAX_KEYS);
+}
+
+
+void hid_set_modifier(uint8_t modifier, bool pressed) {
+    if (pressed)
+        current_modifiers |= modifier;
+    else
+        current_modifiers &= ~modifier;
+}
+
+#define HID_UPDATE_INTERVAL_US 1000  // 1 ms
+static uint64_t last_hid_send = 0;
+static uint8_t prev_modifiers = 0;
+static uint8_t prev_keys[MAX_KEYS] = {0};
+
+void hid_send_report(void) {
+    if (!tud_hid_ready()) return;
+
+    uint64_t now = time_us_64();
+    if (now - last_hid_send < HID_UPDATE_INTERVAL_US) return;
+    last_hid_send = now;
+    
+    if (memcmp(prev_keys, key_state, MAX_KEYS) == 0 &&
+        prev_modifiers == current_modifiers) {
+        return; // nothing changed
+    }
+
+    tud_hid_keyboard_report(1, current_modifiers, key_state);
+
+    prev_modifiers = current_modifiers;
+    memcpy(prev_keys, key_state, MAX_KEYS);
+}
+
+void handle_key_event(uint8_t linux_keycode, bool pressed) {
+    if (!key_table_initialized) return;
+    uint8_t hid_keycode = linux_to_hid[linux_keycode];
+    if (hid_keycode == 0) return; // Unknown key
+
+    if (hid_keycode >= HID_KEY_CONTROL_LEFT && hid_keycode <= HID_KEY_GUI_RIGHT) {
+        // Modifier key
+        hid_set_modifier(1 << (hid_keycode - HID_KEY_CONTROL_LEFT), pressed);
+    } else {
+        // Regular key
+        if (pressed) {
+            hid_add_key(hid_keycode);
+        } else {
+            hid_remove_key(hid_keycode);
+        }
+    }
+    hid_send_report();
 }
 
 // ───────────────────────────────
