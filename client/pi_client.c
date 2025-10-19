@@ -49,7 +49,21 @@ int main(int argc, char **argv) {
         return 1;
     }
     
-    printf("Device opened successfully (fd=%d)\n", fd);
+    // ADD THIS: Set non-blocking mode for batched reading
+    int flags = fcntl(fd, F_GETFL, 0);
+    if (flags < 0) {
+        fprintf(stderr, "ERROR: Failed to get file flags: %s\n", strerror(errno));
+        close(fd);
+        return 1;
+    }
+    
+    if (fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0) {
+        fprintf(stderr, "ERROR: Failed to set non-blocking mode: %s\n", strerror(errno));
+        close(fd);
+        return 1;
+    }
+    
+    printf("Device opened successfully (fd=%d) in non-blocking mode\n", fd);
     fflush(stdout);
 
     printf("Creating socket\n");
@@ -93,9 +107,12 @@ int main(int argc, char **argv) {
     clock_gettime(CLOCK_MONOTONIC, &last_send);
 
     printf("Starting main event loop with select()...\n");
+    printf("Move mouse or press keys to generate events...\n");
     fflush(stdout);
 
     int total_events = 0;
+    int loop_count = 0;
+    
     while (1) {
         fd_set readfds;
         struct timeval timeout;
@@ -103,11 +120,17 @@ int main(int argc, char **argv) {
         FD_ZERO(&readfds);
         FD_SET(fd, &readfds);
         
-        // Wait up to 5ms for events
+        // Wait up to 2ms for events (match SEND_INTERVAL_US)
         timeout.tv_sec = 0;
-        timeout.tv_usec = 5000;  // 5ms
+        timeout.tv_usec = 2000;  // 2ms
         
         int select_result = select(fd + 1, &readfds, NULL, NULL, &timeout);
+        
+        loop_count++;
+        if (loop_count % 1000 == 0) {
+            printf("Loop %d: select_result=%d, total_events=%d\n", loop_count, select_result, total_events);
+            fflush(stdout);
+        }
         
         if (select_result > 0 && FD_ISSET(fd, &readfds)) {
             // Events available - read as many as possible
@@ -120,7 +143,13 @@ int main(int argc, char **argv) {
                     total_events++;
                     events_this_batch++;
                     
-                    // Process event (same as before)
+                    if (total_events <= 10) {
+                        printf("Event %d: type=%d, code=%d, value=%d\n", 
+                               total_events, ev.type, ev.code, ev.value);
+                        fflush(stdout);
+                    }
+                    
+                    // Process event
                     if (ev.type == EV_KEY || ev.type == EV_REL) {
                         char entry[64];
                         int n = 0;
@@ -137,17 +166,30 @@ int main(int argc, char **argv) {
                             event_count++;
                         }
                     }
-                } else if (r < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
-                    // No more events available
-                    break;
+                } else if (r < 0) {
+                    if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                        // No more events available right now - this is normal
+                        break;
+                    } else {
+                        fprintf(stderr, "Read error: %s\n", strerror(errno));
+                        goto exit_loop;
+                    }
                 } else {
-                    fprintf(stderr, "Read error: %s\n", strerror(errno));
+                    fprintf(stderr, "Short read: got %zd bytes\n", r);
                     goto exit_loop;
                 }
             }
             
-            printf("Read %d events in this batch\n", events_this_batch);
-            fflush(stdout);
+            if (events_this_batch > 0) {
+                printf("Read %d events in this batch\n", events_this_batch);
+                fflush(stdout);
+            }
+        } else if (select_result == 0) {
+            // Timeout - this is normal, no events to read
+        } else {
+            // Select error
+            fprintf(stderr, "Select error: %s\n", strerror(errno));
+            goto exit_loop;
         }
 
         // Check if we should send
@@ -165,6 +207,9 @@ int main(int argc, char **argv) {
                                     (struct sockaddr*)&addr, sizeof(addr));
                 if (sent < 0) {
                     fprintf(stderr, "ERROR: sendto failed: %s\n", strerror(errno));
+                } else {
+                    printf("Sent %zd bytes successfully\n", sent);
+                    fflush(stdout);
                 }
                 
                 packet_len = 0;
