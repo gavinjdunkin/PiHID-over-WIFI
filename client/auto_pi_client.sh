@@ -73,10 +73,14 @@ scan_devices() {
     local devices=()
     local device
     
-    # Find all suitable event devices (mouse and keyboard)
-    for device in /dev/input/event*; do
-        if [ -e "$device" ] && is_input_device "$device"; then
-            devices+=("$device")
+    # Look for specific symlinks in /dev/input/by-id/
+    for device in /dev/input/by-id/*; do
+        if [[ "$device" == *-event-kbd ]] || [[ "$device" == *-event-mouse ]]; then
+            # Resolve the symlink to the actual event device
+            resolved_device=$(readlink -f "$device")
+            if [ -e "$resolved_device" ]; then
+                devices+=("$resolved_device")
+            fi
         fi
     done
     
