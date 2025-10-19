@@ -11,9 +11,10 @@
 #include <time.h>
 #include <sys/select.h>
 
-#define MAX_PACKET_LEN       1024   // Max UDP payload
-#define MAX_EVENTS_PER_BATCH 64     // Max events per batch
-#define BATCH_SEND_TIMEOUT_US 5000  // Send after 5ms if not full
+#define MAX_PACKET_LEN        1024
+#define MAX_EVENTS_PER_BATCH  64
+#define BATCH_SEND_TIMEOUT_US 5000
+#define MAX_INPUT_DEVS        8  // up to 8 devices
 
 static void sleep_us_rel(unsigned int us) {
     struct timespec ts;
@@ -27,25 +28,33 @@ static long diff_us_since(struct timespec *a, struct timespec *b) {
 }
 
 int main(int argc, char **argv) {
-    if (argc < 4) {
-        fprintf(stderr, "Usage: %s /dev/input/eventX DEST_IP DEST_PORT\n", argv[0]);
+    if (argc < 5) {
+        fprintf(stderr, "Usage: %s DEST_IP DEST_PORT /dev/input/eventX [/dev/input/eventY ...]\n", argv[0]);
         return 1;
     }
 
-    const char *devpath = argv[1];
-    const char *dest_ip = argv[2];
-    int dest_port = atoi(argv[3]);
-
-    int fd = open(devpath, O_RDONLY | O_NONBLOCK);
-    if (fd < 0) {
-        perror("open input device");
+    const char *dest_ip = argv[1];
+    int dest_port = atoi(argv[2]);
+    int dev_count = argc - 3;
+    if (dev_count > MAX_INPUT_DEVS) {
+        fprintf(stderr, "Too many input devices (max %d)\n", MAX_INPUT_DEVS);
         return 1;
+    }
+
+    int fds[MAX_INPUT_DEVS];
+    for (int i = 0; i < dev_count; i++) {
+        const char *devpath = argv[i + 3];
+        fds[i] = open(devpath, O_RDONLY | O_NONBLOCK);
+        if (fds[i] < 0) {
+            perror(devpath);
+            return 1;
+        }
+        printf("Opened: %s (fd=%d)\n", devpath, fds[i]);
     }
 
     int sock = socket(AF_INET, SOCK_DGRAM, 0);
     if (sock < 0) {
         perror("socket");
-        close(fd);
         return 1;
     }
 
@@ -54,20 +63,15 @@ int main(int argc, char **argv) {
     addr.sin_port = htons(dest_port);
     if (inet_pton(AF_INET, dest_ip, &addr.sin_addr) != 1) {
         fprintf(stderr, "Invalid IP: %s\n", dest_ip);
-        close(fd);
-        close(sock);
         return 1;
     }
 
-    printf("Listening to %s → %s:%d\n", devpath, dest_ip, dest_port);
-    printf("Press keys or move mouse to generate events...\n");
+    printf("Sending to %s:%d\n", dest_ip, dest_port);
     fflush(stdout);
 
     struct input_event ev;
     char packet[MAX_PACKET_LEN];
-    int packet_len = 0;
-    int batch_events = 0;
-    int total_packets_sent = 0;
+    int packet_len = 0, batch_events = 0, total_packets_sent = 0;
 
     struct timespec last_send;
     clock_gettime(CLOCK_MONOTONIC, &last_send);
@@ -75,116 +79,72 @@ int main(int argc, char **argv) {
     while (1) {
         fd_set readfds;
         FD_ZERO(&readfds);
-        FD_SET(fd, &readfds);
+        int max_fd = -1;
+        for (int i = 0; i < dev_count; i++) {
+            FD_SET(fds[i], &readfds);
+            if (fds[i] > max_fd) max_fd = fds[i];
+        }
 
-        struct timeval timeout = {0, 2000}; // Wait 2ms for events
-        int ret = select(fd + 1, &readfds, NULL, NULL, &timeout);
-
+        struct timeval timeout = {0, 2000};
+        int ret = select(max_fd + 1, &readfds, NULL, NULL, &timeout);
         if (ret < 0) {
             perror("select");
             break;
         }
 
-        if (ret > 0 && FD_ISSET(fd, &readfds)) {
-            // Read all available events in non-blocking mode
-            int events_this_loop = 0;
-            while (1) {
-                ssize_t r = read(fd, &ev, sizeof(ev));
-                if (r == sizeof(ev)) {
-                    events_this_loop++;
-                    char entry[64];
-                    int n = 0;
+        for (int i = 0; i < dev_count; i++) {
+            if (FD_ISSET(fds[i], &readfds)) {
+                while (1) {
+                    ssize_t r = read(fds[i], &ev, sizeof(ev));
+                    if (r == sizeof(ev)) {
+                        char entry[64];
+                        int n = 0;
 
-                    if (ev.type == EV_REL || ev.code == 272 || ev.code == 273 || ev.code == 274) {
-                        n = snprintf(entry, sizeof(entry), "M,%d,%d;", ev.code, ev.value);
-                        printf("Mouse event: code=%d, value=%d → %s", ev.code, ev.value, entry);
-                    } else if (ev.type == EV_KEY) {
-                        n = snprintf(entry, sizeof(entry), "K,%d,%d;", ev.code, ev.value);
-                        printf("Key event: code=%d, value=%d → %s", ev.code, ev.value, entry);
-                    } else {
-                        printf("Skipped event: type=%d, code=%d, value=%d\n", ev.type, ev.code, ev.value);
-                        continue; // skip other event types
-                    }
+                        if (ev.type == EV_REL || ev.code == 272 || ev.code == 273 || ev.code == 274) {
+                            n = snprintf(entry, sizeof(entry), "M,%d,%d;", ev.code, ev.value);
+                        } else if (ev.type == EV_KEY && ev.value < 2) {
+                            n = snprintf(entry, sizeof(entry), "K,%d,%d;", ev.code, ev.value);
+                        } else continue;
 
-                    if (packet_len + n < MAX_PACKET_LEN) {
-                        memcpy(packet + packet_len, entry, n);
-                        packet_len += n;
-                        batch_events++;
-                        printf("Added to batch (events: %d, packet_len: %d)\n", batch_events, packet_len);
-                    } else {
-                        printf("WARNING: Packet buffer full, dropping event\n");
-                    }
-
-                    if (batch_events >= MAX_EVENTS_PER_BATCH) {
-                        // Send immediately if full
-                        total_packets_sent++;
-                        printf("\n=== SENDING PACKET #%d (BATCH FULL) ===\n", total_packets_sent);
-                        printf("Events in batch: %d\n", batch_events);
-                        printf("Packet length: %d bytes\n", packet_len);
-                        printf("Packet content: %.*s\n", packet_len, packet);
-                        printf("========================================\n\n");
-                        
-                        ssize_t sent = sendto(sock, packet, packet_len, 0,
-                                              (struct sockaddr*)&addr, sizeof(addr));
-                        if (sent < 0) {
-                            perror("sendto");
-                        } else {
-                            printf("Successfully sent %zd bytes\n", sent);
+                        if (packet_len + n < MAX_PACKET_LEN) {
+                            memcpy(packet + packet_len, entry, n);
+                            packet_len += n;
+                            batch_events++;
                         }
-                        
-                        packet_len = 0;
-                        batch_events = 0;
-                        clock_gettime(CLOCK_MONOTONIC, &last_send);
+
+                        if (batch_events >= MAX_EVENTS_PER_BATCH) {
+                            sendto(sock, packet, packet_len, 0,
+                                   (struct sockaddr*)&addr, sizeof(addr));
+                            packet_len = 0;
+                            batch_events = 0;
+                            clock_gettime(CLOCK_MONOTONIC, &last_send);
+                            total_packets_sent++;
+                        }
+                    } else if (r < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+                        break;
+                    } else {
+                        perror("read");
+                        goto cleanup;
                     }
-                } else if (r < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
-                    // No more events
-                    break;
-                } else {
-                    perror("read");
-                    goto cleanup;
                 }
-            }
-            
-            if (events_this_loop > 0) {
-                printf("Read %d events in this loop\n", events_this_loop);
-                fflush(stdout);
             }
         }
 
-        // Check time since last send
         struct timespec now;
         clock_gettime(CLOCK_MONOTONIC, &now);
         long elapsed_us = diff_us_since(&now, &last_send);
-        
         if (packet_len > 0 && elapsed_us >= BATCH_SEND_TIMEOUT_US) {
-            // Send accumulated events after timeout
-            total_packets_sent++;
-            printf("\n=== SENDING PACKET #%d (TIMEOUT) ===\n", total_packets_sent);
-            printf("Events in batch: %d\n", batch_events);
-            printf("Packet length: %d bytes\n", packet_len);
-            printf("Timeout elapsed: %ld μs\n", elapsed_us);
-            printf("Packet content: %.*s\n", packet_len, packet);
-            printf("===================================\n\n");
-            
-            ssize_t sent = sendto(sock, packet, packet_len, 0,
-                                  (struct sockaddr*)&addr, sizeof(addr));
-            if (sent < 0) {
-                perror("sendto");
-            } else {
-                printf("Successfully sent %zd bytes\n", sent);
-            }
-            
+            sendto(sock, packet, packet_len, 0, (struct sockaddr*)&addr, sizeof(addr));
             packet_len = 0;
             batch_events = 0;
             clock_gettime(CLOCK_MONOTONIC, &last_send);
+            total_packets_sent++;
         }
-        
-        fflush(stdout);
     }
 
 cleanup:
     printf("\nTotal packets sent: %d\n", total_packets_sent);
+    for (int i = 0; i < dev_count; i++) close(fds[i]);
     close(sock);
-    close(fd);
     return 0;
 }
