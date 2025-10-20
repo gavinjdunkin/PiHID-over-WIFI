@@ -147,13 +147,12 @@ void handle_key_event(uint8_t linux_keycode, bool pressed) {
     if (hid_keycode >= HID_KEY_CONTROL_LEFT && hid_keycode <= HID_KEY_GUI_RIGHT) {
         // Modifier key
         hid_set_modifier(1 << (hid_keycode - HID_KEY_CONTROL_LEFT), pressed);
+    }
+    
+    if (pressed) {
+        hid_add_key(hid_keycode);
     } else {
-        // Regular key
-        if (pressed) {
-            hid_add_key(hid_keycode);
-        } else {
-            hid_remove_key(hid_keycode);
-        }
+        hid_remove_key(hid_keycode);
     }
     hid_send_report();
 }
