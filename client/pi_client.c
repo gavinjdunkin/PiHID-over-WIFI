@@ -16,6 +16,15 @@
 #define BATCH_SEND_TIMEOUT_US 5000
 #define MAX_INPUT_DEVS        8  // up to 8 devices
 
+#define MAX_KEYS 6
+#define HID_UPDATE_INTERVAL_US 1000  // 1 ms
+
+static uint8_t key_state[MAX_KEYS] = {0};
+static uint8_t current_modifiers = 0;
+static uint64_t last_hid_send = 0;
+static uint8_t prev_modifiers = 0;
+static uint8_t prev_keys[MAX_KEYS] = {0};
+
 static void sleep_us_rel(unsigned int us) {
     struct timespec ts;
     ts.tv_sec = us / 1000000;
@@ -25,6 +34,85 @@ static void sleep_us_rel(unsigned int us) {
 
 static long diff_us_since(struct timespec *a, struct timespec *b) {
     return (a->tv_sec - b->tv_sec) * 1000000L + (a->tv_nsec - b->tv_nsec) / 1000L;
+}
+
+// Add a key to the key state
+void hid_add_key(uint8_t keycode) {
+    for (int i = 0; i < MAX_KEYS; i++) {
+        if (key_state[i] == keycode) return;  // Avoid duplicates
+    }
+    for (int i = 0; i < MAX_KEYS; i++) {
+        if (key_state[i] == 0) {
+            key_state[i] = keycode;
+            break;
+        }
+    }
+}
+
+// Remove a key from the key state
+void hid_remove_key(uint8_t keycode) {
+    for (int i = 0; i < MAX_KEYS; i++) {
+        if (key_state[i] == keycode) {
+            key_state[i] = 0;
+            break;
+        }
+    }
+    // Compact the array
+    uint8_t compacted[MAX_KEYS] = {0};
+    int idx = 0;
+    for (int i = 0; i < MAX_KEYS; i++) {
+        if (key_state[i] != 0 && idx < MAX_KEYS) {
+            compacted[idx++] = key_state[i];
+        }
+    }
+    memcpy(key_state, compacted, MAX_KEYS);
+}
+
+// Set or clear a modifier key
+void hid_set_modifier(uint8_t modifier, bool pressed) {
+    if (pressed)
+        current_modifiers |= modifier;
+    else
+        current_modifiers &= ~modifier;
+}
+
+void hid_send_keycodes(int sock, struct sockaddr_in *addr, char *mouse_commands)
+{
+    uint64_t now = time_us_64();
+    if (now - last_hid_send < HID_UPDATE_INTERVAL_US) return;
+    last_hid_send = now;
+
+    if (memcmp(prev_keys, key_state, MAX_KEYS) == 0 &&
+        prev_modifiers == current_modifiers) {
+        return;  // Nothing changed
+    }
+
+    char packet[MAX_PACKET_LEN];
+    int packet_len = snprintf(packet, sizeof(packet), "HID,%d,", current_modifiers);
+    for (int i = 0; i < MAX_KEYS; i++) {
+        packet_len += snprintf(packet + packet_len, sizeof(packet) - packet_len, "%d,", key_state[i]);
+    }
+    sendto(sock, packet, packet_len, 0, (struct sockaddr *)addr, sizeof(*addr));
+
+    prev_modifiers = current_modifiers;
+    memcpy(prev_keys, key_state, MAX_KEYS);
+}
+
+// Handle a key event
+void handle_key_event(int sock, struct sockaddr_in *addr, uint8_t linux_keycode, bool pressed) {
+    uint8_t hid_keycode = linux_to_hid[linux_keycode];
+    if (hid_keycode == 0) return;  // Unknown key
+
+    if (hid_keycode >= HID_KEY_CONTROL_LEFT && hid_keycode <= HID_KEY_GUI_RIGHT) {
+        // Modifier key
+        hid_set_modifier(1 << (hid_keycode - HID_KEY_CONTROL_LEFT), pressed);
+    }
+
+    if (pressed) {
+        hid_add_key(hid_keycode);
+    } else {
+        hid_remove_key(hid_keycode);
+    }
 }
 
 int main(int argc, char **argv) {
@@ -103,6 +191,7 @@ int main(int argc, char **argv) {
                         if (ev.type == EV_REL || ev.code == 272 || ev.code == 273 || ev.code == 274) {
                             n = snprintf(entry, sizeof(entry), "M,%d,%d;", ev.code, ev.value);
                         } else if (ev.type == EV_KEY && ev.value < 2) {
+                            handle_key_event(sock, addr, ev.code, ev.value == 1);
                             n = snprintf(entry, sizeof(entry), "K,%d,%d;", ev.code, ev.value);
                         } else continue;
 
