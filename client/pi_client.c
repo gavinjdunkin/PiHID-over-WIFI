@@ -478,7 +478,7 @@ int main(int argc, char **argv) {
                             }
                         } else if (ev.type == EV_KEY && ev.value < 2) {
                             // Handle keyboard events (update keycode array)
-                            handle_key_event(sock, addr, ev.code, ev.value == 1);
+                            handle_key_event(sock, &addr, ev.code, ev.value == 1);
                         } else continue;
 
                         if (batch_events >= MAX_EVENTS_PER_BATCH) {
