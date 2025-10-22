@@ -421,10 +421,17 @@ int main(int argc, char **argv) {
     int mouse_wheel = 0;
     int mouse_buttons = 0;    // Bitmask: bit 0=left, bit 1=right, bit 2=middle
     int mouse_events_pending = 0;
+    
+    // No input tracking
+    bool no_input_sent = false;
+    bool input_activity = false;
+    
     init_key_table();
 
     struct timespec last_send;
+    struct timespec last_input;
     clock_gettime(CLOCK_MONOTONIC, &last_send);
+    clock_gettime(CLOCK_MONOTONIC, &last_input);
 
     while (1) {
         fd_set readfds;
@@ -448,6 +455,9 @@ int main(int argc, char **argv) {
                     ssize_t r = read(fds[i], &ev, sizeof(ev));
                     if (r == sizeof(ev)) {
                         batch_events++;
+                        input_activity = true;
+                        no_input_sent = false;
+                        clock_gettime(CLOCK_MONOTONIC, &last_input);
 
                         if (ev.type == EV_REL) {
                             // Accumulate mouse movement
@@ -513,6 +523,8 @@ int main(int argc, char **argv) {
         struct timespec now;
         clock_gettime(CLOCK_MONOTONIC, &now);
         long elapsed_us = diff_us_since(&now, &last_send);
+        long idle_time_us = diff_us_since(&now, &last_input);
+        
         if ((batch_events > 0 || mouse_events_pending) && elapsed_us >= BATCH_SEND_TIMEOUT_US) {
             // Send current keycode array and accumulated mouse state
             char mouse_commands[256];
@@ -530,6 +542,21 @@ int main(int argc, char **argv) {
             packet_len = 0;
             batch_events = 0;
             clock_gettime(CLOCK_MONOTONIC, &last_send);
+            total_packets_sent++;
+        }
+        
+        // Send no input packet once after input activity stops
+        if (input_activity && !no_input_sent && idle_time_us >= 50000) { // 50ms after last input
+            // Send a "no input" packet with current key state (may be empty) and zero mouse state
+            char mouse_commands[256];
+            snprintf(mouse_commands, sizeof(mouse_commands), "M,0,0,0,%d", mouse_buttons);
+            
+            hid_send_keycodes(sock, &addr, mouse_commands);
+            
+            no_input_sent = true;
+            input_activity = false;
+            printf("Sent no input packet\n");
+            fflush(stdout);
             total_packets_sent++;
         }
     }
