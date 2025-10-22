@@ -70,13 +70,59 @@ static void process_packet(const Packet *pkt) {
     memcpy(msg, pkt->data, pkt->len);
     msg[pkt->len] = '\0';
 
+    // New packet format: "HID,<modifiers>,<key1>,<key2>,...<key6>,M,<delta_x>,<delta_y>,<wheel>,<buttons>"
+    if (strncmp(msg, "HID,", 4) == 0) {
+        char *saveptr;
+        char *token = strtok_r(msg, ",", &saveptr);
+        
+        if (token == NULL || strcmp(token, "HID") != 0) return;
+        
+        // Parse modifiers
+        token = strtok_r(NULL, ",", &saveptr);
+        if (token == NULL) return;
+        uint8_t modifiers = (uint8_t)atoi(token);
+        
+        // Parse 6 key slots
+        uint8_t keys[6] = {0};
+        for (int i = 0; i < 6; i++) {
+            token = strtok_r(NULL, ",", &saveptr);
+            if (token == NULL) return;
+            keys[i] = (uint8_t)atoi(token);
+        }
+        
+        // Parse "M" marker
+        token = strtok_r(NULL, ",", &saveptr);
+        if (token == NULL || strcmp(token, "M") != 0) return;
+        
+        // Parse mouse data
+        token = strtok_r(NULL, ",", &saveptr);
+        if (token == NULL) return;
+        int8_t delta_x = (int8_t)atoi(token);
+        
+        token = strtok_r(NULL, ",", &saveptr);
+        if (token == NULL) return;
+        int8_t delta_y = (int8_t)atoi(token);
+        
+        token = strtok_r(NULL, ",", &saveptr);
+        if (token == NULL) return;
+        int8_t wheel = (int8_t)atoi(token);
+        
+        token = strtok_r(NULL, ",", &saveptr);
+        if (token == NULL) return;
+        uint8_t buttons = (uint8_t)atoi(token);
+        
+        // Apply complete HID state
+        hid_set_complete_state(modifiers, keys, delta_x, delta_y, wheel, buttons);
+        return;
+    }
+
+    // Fall back to old format for backward compatibility
     char *saveptr;
     char *cmd = strtok_r(msg, ";", &saveptr);
 
     int total_dx = 0;
     int total_dy = 0;
     int total_scroll = 0;
-    uint8_t buttons = 0;
     uint8_t button_changes = 0;
 
     while (cmd != NULL) {

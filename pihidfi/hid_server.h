@@ -25,6 +25,11 @@ void hid_send_mouse_move(int8_t dx, int8_t dy, int8_t wheel);
 // pressed: true=press, false=release
 void hid_send_mouse_button(uint8_t button_mask, bool pressed);
 
+// Set complete HID state from new packet format
+// modifiers: HID modifier byte, keys[6]: up to 6 HID keycodes
+// dx, dy, wheel: mouse movement, buttons: mouse button mask
+void hid_set_complete_state(uint8_t modifiers, uint8_t keys[6], int8_t dx, int8_t dy, int8_t wheel, uint8_t buttons);
+
 // Called each main loop iteration to run TinyUSB tasks
 void hid_task(void);
 
