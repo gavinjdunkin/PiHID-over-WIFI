@@ -115,50 +115,6 @@ static void process_packet(const Packet *pkt) {
         hid_set_complete_state(modifiers, keys, delta_x, delta_y, wheel, buttons);
         return;
     }
-
-    // Fall back to old format for backward compatibility
-    char *saveptr;
-    char *cmd = strtok_r(msg, ";", &saveptr);
-
-    int total_dx = 0;
-    int total_dy = 0;
-    int total_scroll = 0;
-    uint8_t button_changes = 0;
-
-    while (cmd != NULL) {
-        while (*cmd == ' ') cmd++;
-
-        if (cmd[0] == 'M') {
-            int type, value;
-            if (sscanf(cmd, "M,%d,%d", &type, &value) == 2) {
-                switch (type) {
-                    case 0: total_dx += (int8_t)value; break;  // accumulate X
-                    case 1: total_dy += (int8_t)value; break;  // accumulate Y
-                    case 8: total_scroll += (int8_t)value; break;
-                    case 272: // left
-                        hid_send_mouse_button(1, value == 1);
-                        break;
-                    case 273: // right
-                        hid_send_mouse_button(2, value == 1);
-                        break;
-                    case 274: // middle
-                        hid_send_mouse_button(4, value == 1);
-                        break;
-                }
-            }
-        } else if (cmd[0] == 'K') {
-            int code, value;
-            if (sscanf(cmd, "K,%d,%d", &code, &value) == 2) {
-                handle_key_event((uint8_t)code, value == 1);
-            }
-        }
-
-        cmd = strtok_r(NULL, ";", &saveptr);
-    }
-
-    // After parsing all commands in this packet, send one combined report
-    if (total_dx || total_dy || total_scroll)
-        hid_send_mouse_move((int8_t)total_dx, (int8_t)total_dy, (int8_t)total_scroll);
 }
 
 
@@ -181,7 +137,6 @@ int main() {
     multicore_launch_core1(core1_entry);
 
     tusb_init();
-    init_key_table();
 
     while (true) {
         tud_task();

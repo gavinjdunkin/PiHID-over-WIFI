@@ -483,11 +483,9 @@ int main(int argc, char **argv) {
 
                         if (batch_events >= MAX_EVENTS_PER_BATCH) {
                             // Send current keycode array and accumulated mouse state
-                            char mouse_commands[256] = {0};
-                            if (mouse_events_pending) {
-                                snprintf(mouse_commands, sizeof(mouse_commands), 
-                                    "M,%d,%d,%d,%d", mouse_delta_x, mouse_delta_y, mouse_wheel, mouse_buttons);
-                            }
+                            char mouse_commands[256];
+                            snprintf(mouse_commands, sizeof(mouse_commands), 
+                                "M,%d,%d,%d,%d", mouse_delta_x, mouse_delta_y, mouse_wheel, mouse_buttons);
                             
                             hid_send_keycodes(sock, &addr, mouse_commands);
                             
@@ -517,11 +515,9 @@ int main(int argc, char **argv) {
         long elapsed_us = diff_us_since(&now, &last_send);
         if ((batch_events > 0 || mouse_events_pending) && elapsed_us >= BATCH_SEND_TIMEOUT_US) {
             // Send current keycode array and accumulated mouse state
-            char mouse_commands[256] = {0};
-            if (mouse_events_pending) {
-                snprintf(mouse_commands, sizeof(mouse_commands), 
-                    "M,%d,%d,%d,%d", mouse_delta_x, mouse_delta_y, mouse_wheel, mouse_buttons);
-            }
+            char mouse_commands[256];
+            snprintf(mouse_commands, sizeof(mouse_commands), 
+                "M,%d,%d,%d,%d", mouse_delta_x, mouse_delta_y, mouse_wheel, mouse_buttons);
             
             hid_send_keycodes(sock, &addr, mouse_commands);
             
